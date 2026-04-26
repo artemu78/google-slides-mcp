@@ -5,14 +5,7 @@ import os
 # Add the parent directory to the path so we can import the module
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# We need to import the function to test. Since it's nested inside `update_slide`, 
-# we'll extract it here for unit testing purposes.
-def find_placeholder(elements, p_type):
-    for el in elements:
-        shape = el.get('shape')
-        if shape and 'placeholder' in shape and shape['placeholder'].get('type') == p_type:
-            return el.get('objectId')
-    return None
+from google_slides_mcp import find_placeholder
 
 class TestFindPlaceholder(unittest.TestCase):
 

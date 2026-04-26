@@ -58,6 +58,17 @@ def get_slides_service():
     creds = get_credentials()
     return build('slides', 'v1', credentials=creds)
 
+def hex_to_rgb(hex_color: str) -> Dict[str, float]:
+    """Converts a hex color string (e.g. #FFFFFF) to an RGB dict for Google Slides API."""
+    hex_color = hex_color.lstrip('#')
+    if len(hex_color) != 6:
+        raise ValueError(f"Invalid hex color: {hex_color}")
+    return {
+        'red': int(hex_color[0:2], 16) / 255.0,
+        'green': int(hex_color[2:4], 16) / 255.0,
+        'blue': int(hex_color[4:6], 16) / 255.0
+    }
+
 # --- Models ---
 
 class CreatePresentationInput(BaseModel):
@@ -74,6 +85,8 @@ class UpdateSlideInput(BaseModel):
     title: Optional[str] = Field(None, description="New text for the title placeholder.")
     body: Optional[str] = Field(None, description="New text for the body/content placeholder.")
     speaker_notes: Optional[str] = Field(None, description="New text for the speaker notes.")
+    background_color: Optional[str] = Field(None, description="Hex color for the slide background (e.g., #FFFFFF).")
+    text_color: Optional[str] = Field(None, description="Hex color for the title and body text (e.g., #000000).")
 
 class DeleteSlideInput(BaseModel):
     presentation_id: str = Field(..., description="The ID of the presentation.")
@@ -124,7 +137,7 @@ async def add_slide(params: AddSlideInput) -> str:
 
 @mcp.tool(name="slides_update_slide")
 async def update_slide(params: UpdateSlideInput) -> str:
-    """Updates title, body, or speaker notes of a slide by its 1-based index."""
+    """Updates title, body, speaker notes, or styling of a slide by its 1-based index."""
     try:
         service = get_slides_service()
         # 1. Get presentation to find the slide objectId at the given index
@@ -147,22 +160,73 @@ async def update_slide(params: UpdateSlideInput) -> str:
                     return el.get('objectId')
             return None
 
-        # 2. Handle Title and Body text
-        if params.title:
-            obj_id = find_placeholder(slide.get('pageElements', []), 'TITLE') or \
-                     find_placeholder(slide.get('pageElements', []), 'CENTERED_TITLE')
-            if obj_id:
-                requests.append({'deleteText': {'objectId': obj_id, 'textRange': {'type': 'ALL'}}})
-                requests.append({'insertText': {'objectId': obj_id, 'text': params.title}})
-        
-        if params.body:
-            obj_id = find_placeholder(slide.get('pageElements', []), 'BODY') or \
-                     find_placeholder(slide.get('pageElements', []), 'OBJECT')
-            if obj_id:
-                requests.append({'deleteText': {'objectId': obj_id, 'textRange': {'type': 'ALL'}}})
-                requests.append({'insertText': {'objectId': obj_id, 'text': params.body}})
+        # 2. Handle Background Color
+        if params.background_color:
+            rgb = hex_to_rgb(params.background_color)
+            requests.append({
+                'updatePageProperties': {
+                    'objectId': slide_id,
+                    'pageProperties': {
+                        'pageBackgroundFill': {
+                            'solidFill': {
+                                'color': {
+                                    'rgbColor': rgb
+                                }
+                            }
+                        }
+                    },
+                    'fields': 'pageBackgroundFill.solidFill.color'
+                }
+            })
 
-        # 3. Handle Speaker Notes
+        # 3. Handle Title and Body text
+        title_id = find_placeholder(slide.get('pageElements', []), 'TITLE') or \
+                   find_placeholder(slide.get('pageElements', []), 'CENTERED_TITLE')
+        
+        if params.title and title_id:
+            requests.append({'deleteText': {'objectId': title_id, 'textRange': {'type': 'ALL'}}})
+            requests.append({'insertText': {'objectId': title_id, 'text': params.title}})
+        
+        body_id = find_placeholder(slide.get('pageElements', []), 'BODY') or \
+                  find_placeholder(slide.get('pageElements', []), 'OBJECT')
+        
+        if params.body and body_id:
+            requests.append({'deleteText': {'objectId': body_id, 'textRange': {'type': 'ALL'}}})
+            requests.append({'insertText': {'objectId': body_id, 'text': params.body}})
+
+        # 4. Handle Text Style (Foreground Color)
+        if params.text_color:
+            rgb = hex_to_rgb(params.text_color)
+            if title_id:
+                requests.append({
+                    'updateTextStyle': {
+                        'objectId': title_id,
+                        'style': {
+                            'foregroundColor': {
+                                'opaqueColor': {
+                                    'rgbColor': rgb
+                                }
+                            }
+                        },
+                        'fields': 'foregroundColor'
+                    }
+                })
+            if body_id:
+                requests.append({
+                    'updateTextStyle': {
+                        'objectId': body_id,
+                        'style': {
+                            'foregroundColor': {
+                                'opaqueColor': {
+                                    'rgbColor': rgb
+                                }
+                            }
+                        },
+                        'fields': 'foregroundColor'
+                    }
+                })
+
+        # 5. Handle Speaker Notes
         if params.speaker_notes:
             notes_page = slide.get('notesPage')
             if notes_page:

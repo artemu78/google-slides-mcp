@@ -79,6 +79,15 @@ class DeleteSlideInput(BaseModel):
     presentation_id: str = Field(..., description="The ID of the presentation.")
     slide_index: int = Field(..., description="1-based index of the slide to delete.", ge=1)
 
+# --- Helpers ---
+
+def find_placeholder(elements, p_type):
+    for el in elements:
+        shape = el.get('shape')
+        if shape and 'placeholder' in shape and shape['placeholder'].get('type') == p_type:
+            return el.get('objectId')
+    return None
+
 # --- Tools ---
 
 @mcp.tool(name="slides_create_presentation")
@@ -139,14 +148,6 @@ async def update_slide(params: UpdateSlideInput) -> str:
         
         requests = []
         
-        # Helper to find placeholder
-        def find_placeholder(elements, p_type):
-            for el in elements:
-                shape = el.get('shape')
-                if shape and 'placeholder' in shape and shape['placeholder'].get('type') == p_type:
-                    return el.get('objectId')
-            return None
-
         # 2. Handle Title and Body text
         if params.title:
             obj_id = find_placeholder(slide.get('pageElements', []), 'TITLE') or \

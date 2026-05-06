@@ -235,34 +235,21 @@ async def update_slide(params: UpdateSlideInput) -> str:
         # 4. Handle Text Style (Foreground Color)
         if params.text_color:
             rgb = hex_to_rgb(params.text_color)
-            if title_id:
-                requests.append({
-                    'updateTextStyle': {
-                        'objectId': title_id,
-                        'style': {
-                            'foregroundColor': {
-                                'opaqueColor': {
-                                    'rgbColor': rgb
+            for obj_id in [title_id, body_id]:
+                if obj_id:
+                    requests.append({
+                        'updateTextStyle': {
+                            'objectId': obj_id,
+                            'style': {
+                                'foregroundColor': {
+                                    'opaqueColor': {
+                                        'rgbColor': rgb
+                                    }
                                 }
-                            }
-                        },
-                        'fields': 'foregroundColor'
-                    }
-                })
-            if body_id:
-                requests.append({
-                    'updateTextStyle': {
-                        'objectId': body_id,
-                        'style': {
-                            'foregroundColor': {
-                                'opaqueColor': {
-                                    'rgbColor': rgb
-                                }
-                            }
-                        },
-                        'fields': 'foregroundColor'
-                    }
-                })
+                            },
+                            'fields': 'foregroundColor'
+                        }
+                    })
 
         # 5. Handle Speaker Notes
         if params.speaker_notes:

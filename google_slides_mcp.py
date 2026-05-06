@@ -79,7 +79,7 @@ def get_slides_service():
 
 def hex_to_rgb(hex_color: str) -> Dict[str, float]:
     """Converts a hex color string (e.g. #FFFFFF) to an RGB dict for Google Slides API."""
-    hex_color = hex_color.lstrip('#')
+    hex_color = hex_color.strip().lstrip('#')
     if len(hex_color) != 6:
         raise ValueError(f"Invalid hex color: {hex_color}")
     return {

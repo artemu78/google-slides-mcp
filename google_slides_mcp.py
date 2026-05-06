@@ -163,26 +163,8 @@ async def update_slide(params: UpdateSlideInput) -> str:
             return f"Error: Slide index {params.slide_index} out of bounds (Total slides: {len(slides)})"
         
         slide = slides[params.slide_index - 1]
-        slide_id = slide.get('objectId')
-        
         requests = []
-        
-<<<<<<< Updated upstream
-        # 2. Handle Title and Body text
-        if params.title:
-            obj_id = find_placeholder(slide.get('pageElements', []), 'TITLE') or \
-                     find_placeholder(slide.get('pageElements', []), 'CENTERED_TITLE')
-            if obj_id:
-                requests.append({'deleteText': {'objectId': obj_id, 'textRange': {'type': 'ALL'}}})
-                requests.append({'insertText': {'objectId': obj_id, 'text': params.title}})
-        
-        if params.body:
-            obj_id = find_placeholder(slide.get('pageElements', []), 'BODY') or \
-                     find_placeholder(slide.get('pageElements', []), 'OBJECT')
-            if obj_id:
-                requests.append({'deleteText': {'objectId': obj_id, 'textRange': {'type': 'ALL'}}})
-                requests.append({'insertText': {'objectId': obj_id, 'text': params.body}})
-=======
+
         # Helper to find placeholder
         def find_placeholder(elements, p_type):
             for el in elements:
@@ -206,26 +188,7 @@ async def update_slide(params: UpdateSlideInput) -> str:
                     return True
             return False
 
-        # 2. Handle Background Color
-        if params.background_color:
-            rgb = hex_to_rgb(params.background_color)
-            requests.append({
-                'updatePageProperties': {
-                    'objectId': slide_id,
-                    'pageProperties': {
-                        'pageBackgroundFill': {
-                            'solidFill': {
-                                'color': {
-                                    'rgbColor': rgb
-                                }
-                            }
-                        }
-                    },
-                    'fields': 'pageBackgroundFill.solidFill.color'
-                }
-            })
-
-        # 3. Handle Title and Body text
+        # 2. Handle Title and Body text
         title_element = find_placeholder(slide.get('pageElements', []), 'TITLE') or \
                         find_placeholder(slide.get('pageElements', []), 'CENTERED_TITLE')
         title_id = title_element.get('objectId') if title_element else None
@@ -243,7 +206,6 @@ async def update_slide(params: UpdateSlideInput) -> str:
             if has_text_content(body_element):
                 requests.append({'deleteText': {'objectId': body_id, 'textRange': {'type': 'ALL'}}})
             requests.append({'insertText': {'objectId': body_id, 'text': params.body}})
->>>>>>> Stashed changes
 
         # 3. Handle Speaker Notes
         if params.speaker_notes:

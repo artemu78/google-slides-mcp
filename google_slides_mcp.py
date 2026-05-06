@@ -172,6 +172,12 @@ async def update_slide(params: UpdateSlideInput) -> str:
                 if shape and 'placeholder' in shape and shape['placeholder'].get('type') == p_type:
                     return el
             return None
+        
+        def find_element_by_object_id(elements, object_id):
+            for el in elements:
+                if el.get('objectId') == object_id:
+                    return el
+            return None
 
         def has_text_content(element: Optional[Dict[str, Any]]) -> bool:
             """True when the shape contains non-whitespace text."""
@@ -211,8 +217,16 @@ async def update_slide(params: UpdateSlideInput) -> str:
         if params.speaker_notes:
             notes_page = slide.get('notesPage')
             if notes_page:
-                notes_element = find_placeholder(notes_page.get('pageElements', []), 'BODY')
-                notes_obj_id = notes_element.get('objectId') if notes_element else None
+                notes_obj_id = notes_page.get('notesProperties', {}).get('speakerNotesObjectId')
+                notes_element = None
+                if notes_obj_id:
+                    notes_element = find_element_by_object_id(
+                        notes_page.get('pageElements', []),
+                        notes_obj_id,
+                    )
+                if not notes_obj_id:
+                    notes_element = find_placeholder(notes_page.get('pageElements', []), 'BODY')
+                    notes_obj_id = notes_element.get('objectId') if notes_element else None
                 if notes_obj_id:
                     if has_text_content(notes_element):
                         requests.append({'deleteText': {'objectId': notes_obj_id, 'textRange': {'type': 'ALL'}}})

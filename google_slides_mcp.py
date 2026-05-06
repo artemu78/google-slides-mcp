@@ -40,18 +40,37 @@ def get_credentials():
     # If there are no (valid) credentials available, let the user log in.
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except Exception as e:
+                logger.error(f"Failed to refresh token: {e}")
+                creds = None
+        
+        if not creds or not creds.valid:
             if not os.path.exists(creds_path):
                 raise FileNotFoundError(
                     f"credentials.json not found in {script_dir}. "
                     "Please provide a Google Cloud OAuth 2.0 Client ID JSON file."
                 )
+            
             flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
-            creds = flow.run_local_server(port=0)
+            
+            # If we are in an MCP server context, we might not be able to open a browser
+            # automatically or we might be in a remote environment.
+            try:
+                # Try to run local server (default)
+                creds = flow.run_local_server(port=0, open_browser=True)
+            except Exception as e:
+                logger.warning(f"Could not open browser for authentication: {e}")
+                logger.info("Falling back to manual authentication URL...")
+                # Note: run_console is deprecated, but we can use run_local_server with open_browser=False
+                creds = flow.run_local_server(port=0, open_browser=False)
+                
         # Save the credentials for the next run
         with open(token_path, 'w') as token:
             token.write(creds.to_json())
+            logger.info(f"Saved new token to {token_path}")
+            
     return creds
 
 def get_slides_service():
@@ -148,6 +167,7 @@ async def update_slide(params: UpdateSlideInput) -> str:
         
         requests = []
         
+<<<<<<< Updated upstream
         # 2. Handle Title and Body text
         if params.title:
             obj_id = find_placeholder(slide.get('pageElements', []), 'TITLE') or \
@@ -162,14 +182,78 @@ async def update_slide(params: UpdateSlideInput) -> str:
             if obj_id:
                 requests.append({'deleteText': {'objectId': obj_id, 'textRange': {'type': 'ALL'}}})
                 requests.append({'insertText': {'objectId': obj_id, 'text': params.body}})
+=======
+        # Helper to find placeholder
+        def find_placeholder(elements, p_type):
+            for el in elements:
+                shape = el.get('shape')
+                if shape and 'placeholder' in shape and shape['placeholder'].get('type') == p_type:
+                    return el
+            return None
+
+        def has_text_content(element: Optional[Dict[str, Any]]) -> bool:
+            """True when the shape contains non-whitespace text."""
+            if not element:
+                return False
+            shape = element.get('shape', {})
+            text_elements = shape.get('text', {}).get('textElements', [])
+            for text_element in text_elements:
+                text_run = text_element.get('textRun', {})
+                if text_run.get('content', '').strip():
+                    return True
+                auto_text = text_element.get('autoText', {})
+                if auto_text.get('content', '').strip():
+                    return True
+            return False
+
+        # 2. Handle Background Color
+        if params.background_color:
+            rgb = hex_to_rgb(params.background_color)
+            requests.append({
+                'updatePageProperties': {
+                    'objectId': slide_id,
+                    'pageProperties': {
+                        'pageBackgroundFill': {
+                            'solidFill': {
+                                'color': {
+                                    'rgbColor': rgb
+                                }
+                            }
+                        }
+                    },
+                    'fields': 'pageBackgroundFill.solidFill.color'
+                }
+            })
+
+        # 3. Handle Title and Body text
+        title_element = find_placeholder(slide.get('pageElements', []), 'TITLE') or \
+                        find_placeholder(slide.get('pageElements', []), 'CENTERED_TITLE')
+        title_id = title_element.get('objectId') if title_element else None
+        
+        if params.title and title_id:
+            if has_text_content(title_element):
+                requests.append({'deleteText': {'objectId': title_id, 'textRange': {'type': 'ALL'}}})
+            requests.append({'insertText': {'objectId': title_id, 'text': params.title}})
+        
+        body_element = find_placeholder(slide.get('pageElements', []), 'BODY') or \
+                       find_placeholder(slide.get('pageElements', []), 'OBJECT')
+        body_id = body_element.get('objectId') if body_element else None
+        
+        if params.body and body_id:
+            if has_text_content(body_element):
+                requests.append({'deleteText': {'objectId': body_id, 'textRange': {'type': 'ALL'}}})
+            requests.append({'insertText': {'objectId': body_id, 'text': params.body}})
+>>>>>>> Stashed changes
 
         # 3. Handle Speaker Notes
         if params.speaker_notes:
             notes_page = slide.get('notesPage')
             if notes_page:
-                notes_obj_id = find_placeholder(notes_page.get('pageElements', []), 'BODY')
+                notes_element = find_placeholder(notes_page.get('pageElements', []), 'BODY')
+                notes_obj_id = notes_element.get('objectId') if notes_element else None
                 if notes_obj_id:
-                    requests.append({'deleteText': {'objectId': notes_obj_id, 'textRange': {'type': 'ALL'}}})
+                    if has_text_content(notes_element):
+                        requests.append({'deleteText': {'objectId': notes_obj_id, 'textRange': {'type': 'ALL'}}})
                     requests.append({'insertText': {'objectId': notes_obj_id, 'text': params.speaker_notes}})
 
         if not requests:

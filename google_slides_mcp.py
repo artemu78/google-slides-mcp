@@ -107,6 +107,20 @@ def find_placeholder(elements, p_type):
             return el.get('objectId')
     return None
 
+def find_speaker_notes_object_id(slide: Dict[str, Any]) -> Optional[str]:
+    """Returns the speaker notes shape objectId for a slide."""
+    notes_page = slide.get('notesPage') or {}
+    notes_properties = notes_page.get('notesProperties') or {}
+    if notes_properties.get('speakerNotesObjectId'):
+        return notes_properties['speakerNotesObjectId']
+
+    # Fallback for older/partial payloads where notesProperties is absent.
+    for placeholder_type in ('SPEAKER_NOTES', 'BODY'):
+        placeholder_id = find_placeholder(notes_page.get('pageElements', []), placeholder_type)
+        if placeholder_id:
+            return placeholder_id
+    return None
+
 # --- Tools ---
 
 @mcp.tool(name="slides_create_presentation")
@@ -208,15 +222,18 @@ async def update_slide(params: UpdateSlideInput) -> str:
             requests.append({'insertText': {'objectId': body_id, 'text': params.body}})
 
         # 3. Handle Speaker Notes
-        if params.speaker_notes:
-            notes_page = slide.get('notesPage')
-            if notes_page:
-                notes_element = find_placeholder(notes_page.get('pageElements', []), 'BODY')
-                notes_obj_id = notes_element.get('objectId') if notes_element else None
-                if notes_obj_id:
-                    if has_text_content(notes_element):
-                        requests.append({'deleteText': {'objectId': notes_obj_id, 'textRange': {'type': 'ALL'}}})
-                    requests.append({'insertText': {'objectId': notes_obj_id, 'text': params.speaker_notes}})
+        if params.speaker_notes is not None:
+            notes_obj_id = find_speaker_notes_object_id(slide)
+            if notes_obj_id:
+                requests.append({'deleteText': {'objectId': notes_obj_id, 'textRange': {'type': 'ALL'}}})
+                if params.speaker_notes:
+                    requests.append({
+                        'insertText': {
+                            'objectId': notes_obj_id,
+                            'insertionIndex': 0,
+                            'text': params.speaker_notes
+                        }
+                    })
 
         if not requests:
             return "No updates performed. Check if placeholders exist on the slide."

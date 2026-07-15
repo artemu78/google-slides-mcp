@@ -2,6 +2,8 @@ import os
 import json
 import logging
 import sys
+import requests
+import uuid
 from contextlib import redirect_stdout
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
@@ -100,6 +102,46 @@ class UpdateSlideInput(BaseModel):
     body: Optional[str] = Field(None, description="New text for the body/content placeholder.")
     speaker_notes: Optional[str] = Field(None, description="New text for the speaker notes.")
 
+class ApplyDarkThemeInput(BaseModel):
+    presentation_id: str = Field(..., description="The ID of the presentation.")
+    background_hex: str = Field("#0B1020", description="Slide background color in #RRGGBB format.")
+    title_hex: str = Field("#F8FAFC", description="Title text color in #RRGGBB format.")
+    body_hex: str = Field("#CBD5E1", description="Body text color in #RRGGBB format.")
+    font_family: str = Field("Aptos", description="Font family applied to slide text.")
+
+class ExportThumbnailsInput(BaseModel):
+    presentation_id: str = Field(..., description="The ID of the presentation.")
+    output_dir: str = Field(..., description="Local directory for exported PNG thumbnails.")
+
+class VisualElementInput(BaseModel):
+    x: float = Field(..., description="Left position in points.")
+    y: float = Field(..., description="Top position in points.")
+    width: float = Field(..., description="Width in points.", gt=0)
+    height: float = Field(..., description="Height in points.", gt=0)
+    text: str = Field("", description="Text inside the element.")
+    shape_type: str = Field("TEXT_BOX", description="Google Slides shape type.")
+    fill_hex: Optional[str] = Field(None, description="Fill color in #RRGGBB format; omit for transparent.")
+    fill_alpha: float = Field(1.0, description="Fill opacity from 0 to 1.", ge=0, le=1)
+    border_hex: Optional[str] = Field(None, description="Border color in #RRGGBB format; omit for no border.")
+    border_alpha: float = Field(1.0, description="Border opacity from 0 to 1.", ge=0, le=1)
+    border_weight: float = Field(1.0, description="Border weight in points.", ge=0)
+    text_hex: str = Field("#FFFFFF", description="Text color in #RRGGBB format.")
+    font_family: str = Field("Arial", description="Font family.")
+    font_size: float = Field(18, description="Font size in points.", gt=0)
+    bold: bool = Field(False, description="Whether text is bold.")
+    alignment: str = Field("START", description="Paragraph alignment: START, CENTER, END.")
+    valign: str = Field("MIDDLE", description="Vertical alignment: TOP, MIDDLE, BOTTOM.")
+
+class ComposeSlideInput(BaseModel):
+    presentation_id: str = Field(..., description="The ID of the presentation.")
+    slide_index: int = Field(..., description="1-based slide index.", ge=1)
+    background_hex: str = Field("#0B1020", description="Slide background in #RRGGBB format.")
+    title_hex: str = Field("#F8FAFC", description="Existing title color in #RRGGBB format.")
+    accent_hex: str = Field("#49D3FF", description="Accent color in #RRGGBB format.")
+    clear_body: bool = Field(True, description="Remove text from the existing body placeholder.")
+    clear_title: bool = Field(False, description="Remove text from the existing title placeholder.")
+    elements: List[VisualElementInput] = Field(default_factory=list, description="Native slide elements to create.")
+
 class DeleteSlideInput(BaseModel):
     presentation_id: str = Field(..., description="The ID of the presentation.")
     slide_index: int = Field(..., description="1-based index of the slide to delete.", ge=1)
@@ -159,6 +201,16 @@ def find_element_by_object_id(elements: List[Dict[str, Any]], object_id: str) ->
         if el.get('objectId') == object_id:
             return el
     return None
+
+def hex_to_rgb(hex_color: str) -> Dict[str, float]:
+    value = hex_color.strip().lstrip('#')
+    if len(value) != 6:
+        raise ValueError(f"Expected #RRGGBB color, got {hex_color!r}")
+    return {
+        "red": int(value[0:2], 16) / 255.0,
+        "green": int(value[2:4], 16) / 255.0,
+        "blue": int(value[4:6], 16) / 255.0,
+    }
 
 def extract_notes_text(slide: Dict[str, Any]) -> str:
     notes_page = slide.get('notesPage') or {}
@@ -344,7 +396,8 @@ async def update_slide(params: UpdateSlideInput) -> str:
             requests.append({'insertText': {'objectId': title_id, 'text': params.title}})
         
         body_element = find_placeholder(slide.get('pageElements', []), 'BODY') or \
-                       find_placeholder(slide.get('pageElements', []), 'OBJECT')
+                       find_placeholder(slide.get('pageElements', []), 'OBJECT') or \
+                       find_placeholder(slide.get('pageElements', []), 'SUBTITLE')
         body_id = body_element.get('objectId') if body_element else None
         
         if params.body and body_id:
@@ -373,6 +426,298 @@ async def update_slide(params: UpdateSlideInput) -> str:
         return f"Successfully updated slide {params.slide_index}"
     except Exception as e:
         return f"Error updating slide: {str(e)}"
+
+@mcp.tool(name="slides_apply_dark_theme")
+async def apply_dark_theme(params: ApplyDarkThemeInput) -> str:
+    """Applies a consistent dark background and readable typography to every slide."""
+    try:
+        service = get_slides_service()
+        presentation = service.presentations().get(
+            presentationId=params.presentation_id
+        ).execute()
+        requests: List[Dict[str, Any]] = []
+        background_rgb = hex_to_rgb(params.background_hex)
+        title_rgb = hex_to_rgb(params.title_hex)
+        body_rgb = hex_to_rgb(params.body_hex)
+
+        for slide_number, slide in enumerate(presentation.get('slides', []), 1):
+            requests.append({
+                'updatePageProperties': {
+                    'objectId': slide.get('objectId'),
+                    'pageProperties': {
+                        'pageBackgroundFill': {
+                            'solidFill': {
+                                'color': {'rgbColor': background_rgb},
+                                'alpha': 1,
+                            },
+                            'propertyState': 'RENDERED',
+                        }
+                    },
+                    'fields': 'pageBackgroundFill',
+                }
+            })
+
+            for element in slide.get('pageElements', []):
+                shape = element.get('shape') or {}
+                placeholder_type = shape.get('placeholder', {}).get('type')
+                if not placeholder_type or not has_text_content(element):
+                    continue
+
+                is_title = placeholder_type in {'TITLE', 'CENTERED_TITLE'}
+                is_subtitle = placeholder_type == 'SUBTITLE'
+                if slide_number == 1 and is_title:
+                    font_size = 50
+                elif is_title:
+                    font_size = 36
+                elif is_subtitle:
+                    font_size = 24
+                else:
+                    font_size = 20
+
+                color = title_rgb if is_title else body_rgb
+                requests.append({
+                    'updateTextStyle': {
+                        'objectId': element.get('objectId'),
+                        'textRange': {'type': 'ALL'},
+                        'style': {
+                            'foregroundColor': {
+                                'opaqueColor': {'rgbColor': color}
+                            },
+                            'fontFamily': params.font_family,
+                            'fontSize': {'magnitude': font_size, 'unit': 'PT'},
+                            'bold': bool(is_title),
+                        },
+                        'fields': 'foregroundColor,fontFamily,fontSize,bold',
+                    }
+                })
+
+        if requests:
+            service.presentations().batchUpdate(
+                presentationId=params.presentation_id,
+                body={'requests': requests},
+            ).execute()
+        return f"Applied dark theme to {len(presentation.get('slides', []))} slides"
+    except Exception as e:
+        return f"Error applying dark theme: {str(e)}"
+
+@mcp.tool(name="slides_export_thumbnails")
+async def export_thumbnails(params: ExportThumbnailsInput) -> str:
+    """Exports a PNG thumbnail for every slide to a local directory for visual QA."""
+    try:
+        service = get_slides_service()
+        presentation = service.presentations().get(
+            presentationId=params.presentation_id
+        ).execute()
+        os.makedirs(params.output_dir, exist_ok=True)
+        exported: List[str] = []
+
+        for number, slide in enumerate(presentation.get('slides', []), 1):
+            thumbnail = service.presentations().pages().getThumbnail(
+                presentationId=params.presentation_id,
+                pageObjectId=slide.get('objectId'),
+                thumbnailProperties_thumbnailSize='LARGE',
+                thumbnailProperties_mimeType='PNG',
+            ).execute()
+            response = requests.get(thumbnail['contentUrl'], timeout=30)
+            response.raise_for_status()
+            output_path = os.path.join(params.output_dir, f"slide-{number:02d}.png")
+            with open(output_path, 'wb') as output_file:
+                output_file.write(response.content)
+            exported.append(output_path)
+
+        return json.dumps({"count": len(exported), "files": exported}, indent=2)
+    except Exception as e:
+        return f"Error exporting thumbnails: {str(e)}"
+
+@mcp.tool(name="slides_compose_slide")
+async def compose_slide(params: ComposeSlideInput) -> str:
+    """Clears the body and composes a slide from positioned native text/shape elements."""
+    try:
+        service = get_slides_service()
+        presentation = service.presentations().get(
+            presentationId=params.presentation_id
+        ).execute()
+        slides = presentation.get('slides', [])
+        if params.slide_index > len(slides):
+            return f"Error: Slide index {params.slide_index} out of bounds."
+
+        slide = slides[params.slide_index - 1]
+        slide_id = slide.get('objectId')
+        requests: List[Dict[str, Any]] = []
+
+        # Make the operation repeatable by removing only elements created by this tool.
+        for element in slide.get('pageElements', []):
+            object_id = element.get('objectId', '')
+            if object_id.startswith('qa_vis_'):
+                requests.append({'deleteObject': {'objectId': object_id}})
+
+        if params.clear_body:
+            body_element = find_placeholder_element(slide.get('pageElements', []), 'BODY') or \
+                           find_placeholder_element(slide.get('pageElements', []), 'OBJECT') or \
+                           find_placeholder_element(slide.get('pageElements', []), 'SUBTITLE')
+            if body_element and has_text_content(body_element):
+                requests.append({
+                    'deleteText': {
+                        'objectId': body_element.get('objectId'),
+                        'textRange': {'type': 'ALL'},
+                    }
+                })
+
+        title_element = find_placeholder_element(slide.get('pageElements', []), 'TITLE') or \
+                        find_placeholder_element(slide.get('pageElements', []), 'CENTERED_TITLE')
+        if title_element and has_text_content(title_element) and params.clear_title:
+            requests.append({
+                'deleteText': {
+                    'objectId': title_element.get('objectId'),
+                    'textRange': {'type': 'ALL'},
+                }
+            })
+        elif title_element and has_text_content(title_element):
+            requests.append({
+                'updateTextStyle': {
+                    'objectId': title_element.get('objectId'),
+                    'textRange': {'type': 'ALL'},
+                    'style': {
+                        'foregroundColor': {
+                            'opaqueColor': {'rgbColor': hex_to_rgb(params.title_hex)}
+                        },
+                        'fontFamily': 'Arial',
+                        'fontSize': {
+                            'magnitude': 50 if params.slide_index == 1 else 36,
+                            'unit': 'PT',
+                        },
+                        'bold': True,
+                    },
+                    'fields': 'foregroundColor,fontFamily,fontSize,bold',
+                }
+            })
+
+        requests.append({
+            'updatePageProperties': {
+                'objectId': slide_id,
+                'pageProperties': {
+                    'pageBackgroundFill': {
+                        'solidFill': {
+                            'color': {'rgbColor': hex_to_rgb(params.background_hex)},
+                            'alpha': 1,
+                        },
+                        'propertyState': 'RENDERED',
+                    }
+                },
+                'fields': 'pageBackgroundFill',
+            }
+        })
+
+        # A consistent accent rule and slide number create deck-level rhythm.
+        standard_elements = [
+            VisualElementInput(
+                x=50, y=77, width=72, height=4, shape_type='RECTANGLE',
+                fill_hex=params.accent_hex, border_hex=params.accent_hex,
+            ),
+            VisualElementInput(
+                x=672, y=378, width=28, height=16,
+                text=f"{params.slide_index:02d}", font_size=9,
+                text_hex=params.accent_hex, alignment='END', valign='MIDDLE',
+            ),
+        ]
+
+        for element_number, element in enumerate(standard_elements + params.elements, 1):
+            object_id = f"qa_vis_{params.slide_index}_{element_number}_{uuid.uuid4().hex[:8]}"
+            requests.append({
+                'createShape': {
+                    'objectId': object_id,
+                    'shapeType': element.shape_type,
+                    'elementProperties': {
+                        'pageObjectId': slide_id,
+                        'size': {
+                            'width': {'magnitude': element.width, 'unit': 'PT'},
+                            'height': {'magnitude': element.height, 'unit': 'PT'},
+                        },
+                        'transform': {
+                            'scaleX': 1,
+                            'scaleY': 1,
+                            'translateX': element.x,
+                            'translateY': element.y,
+                            'unit': 'PT',
+                        },
+                    },
+                }
+            })
+
+            shape_properties: Dict[str, Any] = {
+                'contentAlignment': element.valign,
+            }
+            fields = ['contentAlignment']
+            if element.fill_hex:
+                shape_properties['shapeBackgroundFill'] = {
+                    'solidFill': {
+                        'color': {'rgbColor': hex_to_rgb(element.fill_hex)},
+                        'alpha': element.fill_alpha,
+                    },
+                    'propertyState': 'RENDERED',
+                }
+            else:
+                shape_properties['shapeBackgroundFill'] = {'propertyState': 'NOT_RENDERED'}
+            fields.append('shapeBackgroundFill')
+
+            if element.border_hex:
+                shape_properties['outline'] = {
+                    'outlineFill': {
+                        'solidFill': {
+                            'color': {'rgbColor': hex_to_rgb(element.border_hex)},
+                            'alpha': element.border_alpha,
+                        }
+                    },
+                    'weight': {'magnitude': element.border_weight, 'unit': 'PT'},
+                    'dashStyle': 'SOLID',
+                    'propertyState': 'RENDERED',
+                }
+            else:
+                shape_properties['outline'] = {'propertyState': 'NOT_RENDERED'}
+            fields.append('outline')
+
+            requests.append({
+                'updateShapeProperties': {
+                    'objectId': object_id,
+                    'shapeProperties': shape_properties,
+                    'fields': ','.join(fields),
+                }
+            })
+
+            if element.text:
+                requests.append({'insertText': {'objectId': object_id, 'text': element.text}})
+                requests.append({
+                    'updateTextStyle': {
+                        'objectId': object_id,
+                        'textRange': {'type': 'ALL'},
+                        'style': {
+                            'foregroundColor': {
+                                'opaqueColor': {'rgbColor': hex_to_rgb(element.text_hex)}
+                            },
+                            'fontFamily': element.font_family,
+                            'fontSize': {'magnitude': element.font_size, 'unit': 'PT'},
+                            'bold': element.bold,
+                        },
+                        'fields': 'foregroundColor,fontFamily,fontSize,bold',
+                    }
+                })
+                requests.append({
+                    'updateParagraphStyle': {
+                        'objectId': object_id,
+                        'textRange': {'type': 'ALL'},
+                        'style': {'alignment': element.alignment},
+                        'fields': 'alignment',
+                    }
+                })
+
+        if requests:
+            service.presentations().batchUpdate(
+                presentationId=params.presentation_id,
+                body={'requests': requests},
+            ).execute()
+        return f"Composed slide {params.slide_index} with {len(params.elements)} custom elements"
+    except Exception as e:
+        return f"Error composing slide: {str(e)}"
 
 @mcp.tool(name="slides_delete_slide")
 async def delete_slide(params: DeleteSlideInput) -> str:

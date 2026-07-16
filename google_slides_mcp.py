@@ -8,7 +8,7 @@ from contextlib import redirect_stdout
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
 from mcp.server.fastmcp import FastMCP
-
+from mcp.types import ToolAnnotations
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -146,26 +146,6 @@ class DeleteSlideInput(BaseModel):
     presentation_id: str = Field(..., description="The ID of the presentation.")
     slide_index: int = Field(..., description="1-based index of the slide to delete.", ge=1)
 
-class SpeakerNotesExperimentInput(BaseModel):
-    title: str = Field(
-        "Speaker Notes Experiment",
-        description="Title for the generated test presentation.",
-    )
-    slides_count: int = Field(
-        5,
-        description="How many similar slides to create for strategy testing.",
-        ge=2,
-        le=20,
-    )
-    base_slide_layout: str = Field(
-        "TITLE_AND_BODY",
-        description="Layout to use for generated test slides.",
-    )
-    debug: bool = Field(
-        False,
-        description="Include verbose diagnostics with before/after notes internals and request payloads.",
-    )
-
 # --- Helpers ---
 
 def find_placeholder(elements, p_type):
@@ -300,7 +280,14 @@ def summarize_notes_page(
 
 # --- Tools ---
 
-@mcp.tool(name="slides_create_presentation")
+@mcp.tool(name="create_presentation", 
+    annotations=ToolAnnotations(
+        title="Create Google Slides Presentation",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ))
 async def create_presentation(params: CreatePresentationInput) -> str:
     """Creates a new Google Slides presentation."""
     try:
@@ -314,7 +301,14 @@ async def create_presentation(params: CreatePresentationInput) -> str:
     except Exception as e:
         return f"Error creating presentation: {str(e)}"
 
-@mcp.tool(name="slides_add_slide")
+@mcp.tool(name="add_slide", 
+    annotations=ToolAnnotations(
+        title="Create Google Slides presentation slide",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ))
 async def add_slide(params: AddSlideInput) -> str:
     """Adds a new slide to a presentation at a specified 1-based index."""
     try:
@@ -341,7 +335,14 @@ async def add_slide(params: AddSlideInput) -> str:
     except Exception as e:
         return f"Error adding slide: {str(e)}"
 
-@mcp.tool(name="slides_update_slide")
+@mcp.tool(name="update_slide", 
+    annotations=ToolAnnotations(
+        title="Update Google Slides presentation slide",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ))
 async def update_slide(params: UpdateSlideInput) -> str:
     """Updates title, body, or speaker notes of a slide by its 1-based index."""
     try:
@@ -427,7 +428,14 @@ async def update_slide(params: UpdateSlideInput) -> str:
     except Exception as e:
         return f"Error updating slide: {str(e)}"
 
-@mcp.tool(name="slides_apply_dark_theme")
+@mcp.tool(name="apply_dark_theme", 
+    annotations=ToolAnnotations(
+        title="Apply Dark Theme to Google Slides Presentation",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ))
 async def apply_dark_theme(params: ApplyDarkThemeInput) -> str:
     """Applies a consistent dark background and readable typography to every slide."""
     try:
@@ -500,7 +508,14 @@ async def apply_dark_theme(params: ApplyDarkThemeInput) -> str:
     except Exception as e:
         return f"Error applying dark theme: {str(e)}"
 
-@mcp.tool(name="slides_export_thumbnails")
+@mcp.tool(name="export_thumbnails", 
+    annotations=ToolAnnotations(
+        title="Exports a PNG thumbnail for every slide to a local directory for visual QA.",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ))
 async def export_thumbnails(params: ExportThumbnailsInput) -> str:
     """Exports a PNG thumbnail for every slide to a local directory for visual QA."""
     try:
@@ -529,7 +544,14 @@ async def export_thumbnails(params: ExportThumbnailsInput) -> str:
     except Exception as e:
         return f"Error exporting thumbnails: {str(e)}"
 
-@mcp.tool(name="slides_compose_slide")
+@mcp.tool(name="compose_slide", 
+    annotations=ToolAnnotations(
+        title="Compose Google Slides presentation slide elements",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ))
 async def compose_slide(params: ComposeSlideInput) -> str:
     """Clears the body and composes a slide from positioned native text/shape elements."""
     try:
@@ -719,7 +741,7 @@ async def compose_slide(params: ComposeSlideInput) -> str:
     except Exception as e:
         return f"Error composing slide: {str(e)}"
 
-@mcp.tool(name="slides_delete_slide")
+@mcp.tool(name="delete_slide")
 async def delete_slide(params: DeleteSlideInput) -> str:
     """Deletes a slide at a specified 1-based index."""
     try:
@@ -742,7 +764,14 @@ async def delete_slide(params: DeleteSlideInput) -> str:
     except Exception as e:
         return f"Error deleting slide: {str(e)}"
 
-@mcp.tool(name="slides_get_presentation")
+@mcp.tool(name="get_presentation", 
+    annotations=ToolAnnotations(
+        title="Get Google Slides Presentation Information",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ))
 async def get_presentation(presentation_id: str) -> str:
     """Returns information about a presentation and its slides."""
     try:
@@ -765,146 +794,6 @@ async def get_presentation(presentation_id: str) -> str:
         return json.dumps(summary, indent=2)
     except Exception as e:
         return f"Error getting presentation: {str(e)}"
-
-@mcp.tool(name="slides_speaker_notes_experiment")
-async def speaker_notes_experiment(params: SpeakerNotesExperimentInput) -> str:
-    """Creates similar slides and tests multiple speaker-notes write strategies."""
-    try:
-        service = get_slides_service()
-
-        presentation = service.presentations().create(body={'title': params.title}).execute()
-        presentation_id = presentation.get('presentationId')
-
-        create_requests: List[Dict[str, Any]] = []
-        for _ in range(params.slides_count):
-            create_requests.append(
-                {
-                    'createSlide': {
-                        'slideLayoutReference': {'predefinedLayout': params.base_slide_layout}
-                    }
-                }
-            )
-
-        create_response = service.presentations().batchUpdate(
-            presentationId=presentation_id,
-            body={'requests': create_requests}
-        ).execute()
-        created_slide_ids = [
-            reply.get('createSlide', {}).get('objectId')
-            for reply in create_response.get('replies', [])
-            if reply.get('createSlide', {}).get('objectId')
-        ]
-
-        def get_slide_by_id(deck_data: Dict[str, Any], target_slide_id: str) -> Optional[Dict[str, Any]]:
-            for candidate in deck_data.get('slides', []):
-                if candidate.get('objectId') == target_slide_id:
-                    return candidate
-            return None
-
-        approaches = [
-            "notes_properties_insert_only",
-            "notes_properties_delete_then_insert",
-            "notes_body_placeholder_insert_only",
-            "notes_body_placeholder_delete_then_insert",
-            "both_paths_with_fallback",
-        ]
-
-        results: List[Dict[str, Any]] = []
-        for idx, slide_id in enumerate(created_slide_ids):
-            deck_before = service.presentations().get(presentationId=presentation_id).execute()
-            slide = get_slide_by_id(deck_before, slide_id) or {}
-            approach = approaches[idx % len(approaches)]
-            notes_text = f"Speaker notes strategy: {approach} (slide {idx + 1})"
-
-            title_id = find_placeholder(slide.get('pageElements', []), 'TITLE') or \
-                       find_placeholder(slide.get('pageElements', []), 'CENTERED_TITLE')
-            body_id = find_placeholder(slide.get('pageElements', []), 'BODY') or \
-                      find_placeholder(slide.get('pageElements', []), 'OBJECT')
-
-            prep_requests: List[Dict[str, Any]] = []
-            if title_id:
-                prep_requests.append({'insertText': {'objectId': title_id, 'text': f"Notes Test {idx + 1}"}})
-            if body_id:
-                prep_requests.append({'insertText': {'objectId': body_id, 'text': "Control body content"}})
-            if prep_requests:
-                service.presentations().batchUpdate(
-                    presentationId=presentation_id,
-                    body={'requests': prep_requests}
-                ).execute()
-
-            refreshed_deck = service.presentations().get(presentationId=presentation_id).execute()
-            refreshed_slide = get_slide_by_id(refreshed_deck, slide_id) or {}
-            resolved_notes = resolve_notes_targets(service, presentation_id, refreshed_slide)
-            notes_obj_id = resolved_notes["speakerNotesObjectId"]
-            notes_element = resolved_notes["speakerNotesElement"]
-            body_notes_element = resolved_notes["bodyPlaceholderElement"]
-
-            write_requests: List[Dict[str, Any]] = []
-            target_ids: List[str] = []
-            if approach in ("notes_properties_insert_only", "notes_properties_delete_then_insert", "both_paths_with_fallback") and notes_obj_id:
-                target_ids.append(notes_obj_id)
-            if approach in ("notes_body_placeholder_insert_only", "notes_body_placeholder_delete_then_insert", "both_paths_with_fallback") and body_notes_element:
-                body_notes_id = body_notes_element.get('objectId')
-                if body_notes_id:
-                    target_ids.append(body_notes_id)
-            target_ids = list(dict.fromkeys(target_ids))
-
-            for target_id in target_ids:
-                should_delete = approach in (
-                    "notes_properties_delete_then_insert",
-                    "notes_body_placeholder_delete_then_insert",
-                    "both_paths_with_fallback",
-                )
-                target_element = notes_element if target_id == notes_obj_id else body_notes_element
-                if should_delete and has_text_content(target_element):
-                    write_requests.append({'deleteText': {'objectId': target_id, 'textRange': {'type': 'ALL'}}})
-                write_requests.append({'insertText': {'objectId': target_id, 'text': notes_text}})
-
-            if not write_requests:
-                results.append(
-                    {
-                        "slideId": slide_id,
-                        "approach": approach,
-                        "status": "skipped",
-                        "reason": "No notes shape target found",
-                        "before": summarize_notes_page(service, presentation_id, refreshed_slide) if params.debug else None,
-                    }
-                )
-                continue
-
-            service.presentations().batchUpdate(
-                presentationId=presentation_id,
-                body={'requests': write_requests}
-            ).execute()
-
-            verify_deck = service.presentations().get(presentationId=presentation_id).execute()
-            verify_slide = get_slide_by_id(verify_deck, slide_id) or {}
-            verify_summary = summarize_notes_page(service, presentation_id, verify_slide)
-            read_back = verify_summary.get("extractedNotesText", "")
-            slide_result: Dict[str, Any] = {
-                "slideId": slide_id,
-                "approach": approach,
-                "expectedNotes": notes_text,
-                "readBackNotes": read_back,
-                "matches": read_back == notes_text,
-            }
-            if params.debug:
-                slide_result["before"] = summarize_notes_page(service, presentation_id, refreshed_slide)
-                slide_result["writeRequests"] = write_requests
-                slide_result["after"] = verify_summary
-            results.append(slide_result)
-
-        return json.dumps(
-            {
-                "presentationId": presentation_id,
-                "url": f"https://docs.google.com/presentation/d/{presentation_id}/edit",
-                "slidesCreated": len(created_slide_ids),
-                "results": results,
-            },
-            indent=2,
-        )
-    except Exception as e:
-        return f"Error running speaker notes experiment: {str(e)}"
 
 if __name__ == "__main__":
     mcp.run()

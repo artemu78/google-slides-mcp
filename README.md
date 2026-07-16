@@ -6,11 +6,14 @@ It provides tools to create decks, add slides, update slide text placeholders, a
 
 ## Features / Tools
 
-- `slides_create_presentation`: Creates a new presentation.
-- `slides_add_slide`: Adds a slide with a specified layout at a given index.
-- `slides_update_slide`: Updates the Title, Body, and Speaker Notes of a slide using a 1-based index.
-- `slides_delete_slide`: Deletes a slide by its 1-based index.
-- `slides_get_presentation`: Retrieves metadata and slide count for a presentation.
+- `create_presentation`: Creates a new Google Slides presentation.
+- `add_slide`: Adds a slide with a specified layout at an optional 1-based insertion index.
+- `update_slide`: Updates the title, body, and speaker notes of a slide using its 1-based index.
+- `apply_dark_theme`: Applies a configurable dark background, text colors, and font family to every slide.
+- `export_thumbnails`: Exports every slide as a PNG thumbnail to a local directory for visual QA.
+- `compose_slide`: Clears selected placeholders and composes a slide from positioned native text and shape elements.
+- `delete_slide`: Deletes a slide using its 1-based index.
+- `get_presentation`: Retrieves presentation metadata and details for its slides.
 
 ## Prerequisites & Installation
 
@@ -45,7 +48,10 @@ You need two files in the project directory:
         - **Internal**: If you have a Google Workspace and want to limit access to your organization.
         - **External**: If you are using a personal `@gmail.com` account.
     - Fill in the required **App information** (App name, User support email, Developer contact info).
-    - **Add Scopes**: (Optional but recommended) Add `.../auth/presentations` and `.../auth/drive.file`.
+    - **Add Scope**: Add only `https://www.googleapis.com/auth/drive.file`.
+      This non-sensitive, per-file scope lets the server create presentations and
+      continue editing files created by this OAuth app. It does not grant access
+      to arbitrary existing presentations solely from a pasted URL or ID.
     - **Add Test Users**: **CRITICAL STEP** for External apps in "Testing" status. Add your own Google email address here. Only these users will be able to log in.
 4.  **Create Credentials**:
     - Go to **APIs & Services > Credentials**.
@@ -55,6 +61,9 @@ You need two files in the project directory:
 5.  **Download JSON**: After creation, click **Download JSON** for the new credential. Rename the file to `credentials.json` and move it to the root of this repository.
 
 ### 2) Generate `token.json` (The "Login" Step)
+
+If you previously authorized this server with different scopes, delete the old
+`token.json` first so Google issues a new grant containing only `drive.file`.
 
 Run this command from the project root to trigger the browser-based authentication flow. **Make sure to log into the browser with the same Google account you added as a Test User.**
 

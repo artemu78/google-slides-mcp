@@ -1,10 +1,8 @@
 token.json
 credentials.json
-<<<<<<< Updated upstream
-__pycache__/
-*.pyc
-=======
 **/__pycache__/
 **/*.pyc
 .DS_Store
->>>>>>> Stashed changes
+.env
+.venv
+.agents

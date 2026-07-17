@@ -146,6 +146,10 @@ class DeleteSlideInput(BaseModel):
     presentation_id: str = Field(..., description="The ID of the presentation.")
     slide_index: int = Field(..., description="1-based index of the slide to delete.", ge=1)
 
+class DublicateSlideInput(BaseModel):
+    presentation_id: str = Field(..., description="The ID of the presentation.")
+    slide_index: int = Field(..., description="1-based index of the slide to duplicate.", ge=1)
+
 # --- Helpers ---
 
 def find_placeholder(elements, p_type):
@@ -334,6 +338,52 @@ async def add_slide(params: AddSlideInput) -> str:
         return f"Successfully added slide with ID: {slide_id}"
     except Exception as e:
         return f"Error adding slide: {str(e)}"
+
+@mcp.tool(name="dublicate_slide",
+    annotations=ToolAnnotations(
+        title="Duplicate Google Slides presentation slide",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ))
+async def dublicate_slide(params: DublicateSlideInput) -> str:
+    """Duplicates a slide selected by its 1-based index."""
+    try:
+        service = get_slides_service()
+        presentation = service.presentations().get(
+            presentationId=params.presentation_id
+        ).execute()
+        slides = presentation.get('slides', [])
+
+        if params.slide_index > len(slides):
+            return (
+                f"Error: Slide index {params.slide_index} out of bounds "
+                f"(Total slides: {len(slides)})"
+            )
+
+        source_slide_id = slides[params.slide_index - 1].get('objectId')
+        response = service.presentations().batchUpdate(
+            presentationId=params.presentation_id,
+            body={
+                'requests': [
+                    {'duplicateObject': {'objectId': source_slide_id}}
+                ]
+            },
+        ).execute()
+        duplicated_slide_id = (
+            response.get('replies', [{}])[0]
+            .get('duplicateObject', {})
+            .get('objectId')
+        )
+
+        return json.dumps({
+            "sourceSlideIndex": params.slide_index,
+            "sourceSlideId": source_slide_id,
+            "duplicatedSlideId": duplicated_slide_id,
+        }, indent=2)
+    except Exception as e:
+        return f"Error duplicating slide: {str(e)}"
 
 @mcp.tool(name="update_slide", 
     annotations=ToolAnnotations(

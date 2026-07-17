@@ -8,6 +8,7 @@ It provides tools to create decks, add slides, update slide text placeholders, a
 
 - `create_presentation`: Creates a new Google Slides presentation.
 - `add_slide`: Adds a slide with a specified layout at an optional 1-based insertion index.
+- `dublicate_slide`: Duplicates a slide using its 1-based index.
 - `update_slide`: Updates the title, body, and speaker notes of a slide using its 1-based index.
 - `apply_dark_theme`: Applies a configurable dark background, text colors, and font family to every slide.
 - `export_thumbnails`: Exports every slide as a PNG thumbnail to a local directory for visual QA.

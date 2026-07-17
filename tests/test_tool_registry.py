@@ -17,6 +17,7 @@ class TestToolRegistry(unittest.IsolatedAsyncioTestCase):
             {
                 "create_presentation",
                 "add_slide",
+                "dublicate_slide",
                 "update_slide",
                 "apply_dark_theme",
                 "export_thumbnails",
@@ -41,6 +42,7 @@ class TestToolRegistry(unittest.IsolatedAsyncioTestCase):
         expected_idempotency = {
             "create_presentation": False,
             "add_slide": False,
+            "dublicate_slide": False,
             "update_slide": True,
             "apply_dark_theme": True,
             "compose_slide": True,

@@ -6,10 +6,10 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from google_slides_mcp import DublicateSlideInput, dublicate_slide
+from google_slides_mcp import DuplicateSlideInput, duplicate_slide
 
 
-class TestDublicateSlide(unittest.IsolatedAsyncioTestCase):
+class TestDuplicateSlide(unittest.IsolatedAsyncioTestCase):
     async def test_duplicates_slide_by_one_based_index(self):
         service = MagicMock()
         presentations_api = service.presentations.return_value
@@ -25,9 +25,9 @@ class TestDublicateSlide(unittest.IsolatedAsyncioTestCase):
             ]
         }
 
-        params = DublicateSlideInput(presentation_id="deck-1", slide_index=2)
+        params = DuplicateSlideInput(presentation_id="deck-1", slide_index=2)
         with patch("google_slides_mcp.get_slides_service", return_value=service):
-            result = await dublicate_slide(params)
+            result = await duplicate_slide(params)
 
         presentations_api.batchUpdate.assert_called_once_with(
             presentationId="deck-1",
@@ -53,9 +53,9 @@ class TestDublicateSlide(unittest.IsolatedAsyncioTestCase):
             "slides": [{"objectId": "slide-1"}]
         }
 
-        params = DublicateSlideInput(presentation_id="deck-1", slide_index=2)
+        params = DuplicateSlideInput(presentation_id="deck-1", slide_index=2)
         with patch("google_slides_mcp.get_slides_service", return_value=service):
-            result = await dublicate_slide(params)
+            result = await duplicate_slide(params)
 
         self.assertEqual(
             result,

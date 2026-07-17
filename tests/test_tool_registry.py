@@ -57,6 +57,21 @@ class TestToolRegistry(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(annotations.idempotentHint, idempotent)
                 self.assertTrue(annotations.openWorldHint)
 
+    async def test_compose_slide_exposes_elements_as_typed_top_level_array(self):
+        schema = self.tools["compose_slide"].inputSchema
+
+        self.assertNotIn("params", schema["properties"])
+        elements = schema["properties"]["elements"]
+        self.assertEqual(elements["type"], "array")
+
+        item_schema = schema["$defs"]["VisualElementInput"]
+        self.assertEqual(elements["items"]["$ref"], "#/$defs/VisualElementInput")
+        self.assertEqual(item_schema["type"], "object")
+        self.assertEqual(
+            set(item_schema["required"]),
+            {"x", "y", "width", "height"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

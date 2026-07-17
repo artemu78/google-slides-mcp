@@ -5,7 +5,7 @@ import sys
 import requests
 import uuid
 from contextlib import redirect_stdout
-from typing import Optional, List, Dict, Any
+from typing import Annotated, Optional, List, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -602,8 +602,45 @@ async def export_thumbnails(params: ExportThumbnailsInput) -> str:
         idempotentHint=True,
         openWorldHint=True,
     ))
-async def compose_slide(params: ComposeSlideInput) -> str:
+async def compose_slide(
+    presentation_id: Annotated[str, Field(description="The ID of the presentation.")],
+    slide_index: Annotated[int, Field(description="1-based slide index.", ge=1)],
+    background_hex: Annotated[
+        str, Field(description="Slide background in #RRGGBB format.")
+    ] = "#0B1020",
+    title_hex: Annotated[
+        str, Field(description="Existing title color in #RRGGBB format.")
+    ] = "#F8FAFC",
+    accent_hex: Annotated[
+        str, Field(description="Accent color in #RRGGBB format.")
+    ] = "#49D3FF",
+    clear_body: Annotated[
+        bool, Field(description="Remove text from the existing body placeholder.")
+    ] = True,
+    clear_title: Annotated[
+        bool, Field(description="Remove text from the existing title placeholder.")
+    ] = False,
+    elements: Annotated[
+        List[VisualElementInput],
+        Field(
+            description=(
+                "Native slide elements to create. Each array item must include x, y, "
+                "width, and height; all styling fields are optional."
+            )
+        ),
+    ] = [],
+) -> str:
     """Clears the body and composes a slide from positioned native text/shape elements."""
+    params = ComposeSlideInput(
+        presentation_id=presentation_id,
+        slide_index=slide_index,
+        background_hex=background_hex,
+        title_hex=title_hex,
+        accent_hex=accent_hex,
+        clear_body=clear_body,
+        clear_title=clear_title,
+        elements=elements,
+    )
     try:
         service = get_slides_service()
         presentation = service.presentations().get(

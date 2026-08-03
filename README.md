@@ -9,12 +9,15 @@ It provides tools to create decks, add slides, update slide text placeholders, a
 - `create_presentation`: Creates a new Google Slides presentation.
 - `add_slide`: Adds a slide with a specified layout at an optional 1-based insertion index.
 - `duplicate_slide`: Duplicates a slide using its 1-based index.
+- `rearrange_slides`: Moves slides using a mapping of current 1-based slide numbers to new 1-based positions; unspecified slides retain their relative order.
+- `batch_update`: Runs raw Google Slides `presentations.batchUpdate` requests, including the full Google Slides API request surface.
 - `update_slide`: Updates the title, body, and speaker notes of a slide using its 1-based index.
 - `apply_dark_theme`: Applies a configurable dark background, text colors, and font family to every slide.
 - `export_thumbnails`: Exports every slide as a PNG thumbnail to a local directory for visual QA.
 - `compose_slide`: Clears selected placeholders and composes a slide from positioned native text and shape elements.
 - `delete_slide`: Deletes a slide using its 1-based index.
 - `get_presentation`: Retrieves presentation metadata and details for its slides.
+- `get_slide_elements`: Retrieves object IDs, element types, text, sizes, and transforms for one slide so individual elements can be edited with `batch_update`.
 
 ## Prerequisites & Installation
 
@@ -117,6 +120,35 @@ Unit tests are included to verify critical logic:
 ```bash
 python3 -m unittest discover tests
 ```
+
+## Raw `batch_update` text colors
+
+`updateTextStyle.style.foregroundColor` is an `OptionalColor`, so its RGB value
+must be nested under `opaqueColor`:
+
+```json
+{
+  "updateTextStyle": {
+    "objectId": "text-box-id",
+    "textRange": {"type": "ALL"},
+    "style": {
+      "foregroundColor": {
+        "opaqueColor": {
+          "rgbColor": {"red": 0, "green": 0.44, "blue": 0.75}
+        }
+      }
+    },
+    "fields": "foregroundColor"
+  }
+}
+```
+
+For convenience, this tool also accepts `"foregroundColor": "#0070C0"` and
+converts it to the wrapper above. A direct
+`"foregroundColor": {"rgbColor": ...}` is rejected locally with a validation
+message before the Google API is called. This rule applies only to text style:
+shape and page fills still use `solidFill.color` as a `Color`, where a direct
+`{"rgbColor": ...}` is correct.
 
 ## Troubleshooting
 

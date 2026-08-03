@@ -4,6 +4,7 @@ import logging
 import sys
 import requests
 import uuid
+from copy import deepcopy
 from contextlib import redirect_stdout
 from typing import Annotated, Optional, List, Dict, Any
 from pydantic import BaseModel, Field, ConfigDict
@@ -150,6 +151,31 @@ class DuplicateSlideInput(BaseModel):
     presentation_id: str = Field(..., description="The ID of the presentation.")
     slide_index: int = Field(..., description="1-based index of the slide to duplicate.", ge=1)
 
+class RearrangeSlidesInput(BaseModel):
+    presentation_id: str = Field(..., description="The ID of the presentation.")
+    slide_positions: Dict[int, int] = Field(
+        ...,
+        description=(
+            "Mapping of current 1-based slide numbers to their new 1-based positions. "
+            "For example, {\"1\": 3, \"3\": 1} swaps slides 1 and 3. "
+            "Unspecified slides keep their relative order in the remaining positions."
+        ),
+        min_length=1,
+    )
+
+class BatchUpdateInput(BaseModel):
+    presentation_id: str = Field(..., description="The ID of the presentation.")
+    requests: List[Dict[str, Any]] = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Raw Google Slides presentations.batchUpdate requests. For "
+            "updateTextStyle.style.foregroundColor, use an OptionalColor wrapper: "
+            "{\"opaqueColor\": {\"rgbColor\": {\"red\": 0, \"green\": 0.44, \"blue\": 0.75}}}. "
+            "A #RRGGBB foregroundColor string is also accepted and normalized to that wrapper."
+        ),
+    )
+
 # --- Helpers ---
 
 def find_placeholder(elements, p_type):
@@ -186,6 +212,46 @@ def find_element_by_object_id(elements: List[Dict[str, Any]], object_id: str) ->
             return el
     return None
 
+def summarize_page_element(element: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the stable identity and layout data needed for surgical edits."""
+    element_types = (
+        'shape', 'image', 'table', 'line', 'video', 'wordArt',
+        'sheetsChart', 'elementGroup',
+    )
+    element_type = next((name for name in element_types if name in element), 'unknown')
+    summary: Dict[str, Any] = {
+        "objectId": element.get('objectId'),
+        "type": element_type,
+        "size": element.get('size'),
+        "transform": element.get('transform'),
+    }
+
+    if element.get('title') is not None:
+        summary["title"] = element.get('title')
+    if element.get('description') is not None:
+        summary["description"] = element.get('description')
+
+    shape = element.get('shape')
+    if shape:
+        summary["shapeType"] = shape.get('shapeType')
+        placeholder = shape.get('placeholder')
+        if placeholder:
+            summary["placeholderType"] = placeholder.get('type')
+        text = ''.join(
+            text_element.get('textRun', {}).get('content', '')
+            or text_element.get('autoText', {}).get('content', '')
+            for text_element in shape.get('text', {}).get('textElements', [])
+        ).rstrip('\n')
+        if text:
+            summary["text"] = text
+
+    table = element.get('table')
+    if table:
+        summary["rows"] = table.get('rows')
+        summary["columns"] = table.get('columns')
+
+    return summary
+
 def hex_to_rgb(hex_color: str) -> Dict[str, float]:
     value = hex_color.strip().lstrip('#')
     if len(value) != 6:
@@ -195,6 +261,37 @@ def hex_to_rgb(hex_color: str) -> Dict[str, float]:
         "green": int(value[2:4], 16) / 255.0,
         "blue": int(value[4:6], 16) / 255.0,
     }
+
+def normalize_text_style_foreground_colors(
+    batch_requests: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Normalize shorthand text colors and reject the invalid direct Color shape.
+
+    TextStyle.foregroundColor is an OptionalColor, unlike shape fills whose
+    solidFill.color field is a Color. Keep all other raw Google API requests
+    untouched so callers can use the full batchUpdate surface.
+    """
+    normalized_requests = deepcopy(batch_requests)
+    for request_index, request in enumerate(normalized_requests):
+        update_text_style = request.get("updateTextStyle")
+        if not isinstance(update_text_style, dict):
+            continue
+        style = update_text_style.get("style")
+        if not isinstance(style, dict) or "foregroundColor" not in style:
+            continue
+
+        foreground_color = style["foregroundColor"]
+        if isinstance(foreground_color, str):
+            style["foregroundColor"] = {
+                "opaqueColor": {"rgbColor": hex_to_rgb(foreground_color)}
+            }
+        elif isinstance(foreground_color, dict) and "rgbColor" in foreground_color:
+            raise ValueError(
+                f"requests[{request_index}].updateTextStyle.style.foregroundColor "
+                "must be an OptionalColor wrapper: "
+                "{\"opaqueColor\": {\"rgbColor\": {...}}}, not {\"rgbColor\": {...}}."
+            )
+    return normalized_requests
 
 def extract_notes_text(slide: Dict[str, Any]) -> str:
     notes_page = slide.get('notesPage') or {}
@@ -384,6 +481,132 @@ async def duplicate_slide(params: DuplicateSlideInput) -> str:
         }, indent=2)
     except Exception as e:
         return f"Error duplicating slide: {str(e)}"
+
+@mcp.tool(name="rearrange_slides",
+    annotations=ToolAnnotations(
+        title="Rearrange Google Slides presentation slides",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ))
+async def rearrange_slides(
+    presentation_id: Annotated[str, Field(description="The ID of the presentation.")],
+    slide_positions: Annotated[
+        Dict[int, int],
+        Field(
+            description=(
+                "Object mapping current 1-based slide numbers to new 1-based positions. "
+                "Example: {\"1\": 3, \"3\": 1}. Unspecified slides retain their relative order."
+            ),
+            min_length=1,
+        ),
+    ],
+) -> str:
+    """Moves slides to requested 1-based positions while preserving unspecified slide order."""
+    params = RearrangeSlidesInput(
+        presentation_id=presentation_id,
+        slide_positions=slide_positions,
+    )
+    try:
+        service = get_slides_service()
+        presentation = service.presentations().get(
+            presentationId=params.presentation_id
+        ).execute()
+        slides = presentation.get('slides', [])
+        slide_count = len(slides)
+        positions = params.slide_positions
+
+        invalid_sources = sorted(index for index in positions if index < 1 or index > slide_count)
+        if invalid_sources:
+            return (
+                f"Error: Slide numbers out of bounds (valid range: 1-{slide_count}): "
+                f"{invalid_sources}"
+            )
+
+        invalid_destinations = sorted(
+            position for position in positions.values()
+            if position < 1 or position > slide_count
+        )
+        if invalid_destinations:
+            return (
+                f"Error: New positions out of bounds (valid range: 1-{slide_count}): "
+                f"{invalid_destinations}"
+            )
+
+        destination_values = list(positions.values())
+        if len(destination_values) != len(set(destination_values)):
+            return "Error: Each requested new position must belong to exactly one slide."
+
+        current_order = [slide.get('objectId') for slide in slides]
+        desired_order: List[Optional[str]] = [None] * slide_count
+        moved_ids = set()
+        for source_index, destination_index in positions.items():
+            slide_id = current_order[source_index - 1]
+            desired_order[destination_index - 1] = slide_id
+            moved_ids.add(slide_id)
+
+        remaining_ids = iter(slide_id for slide_id in current_order if slide_id not in moved_ids)
+        desired_order = [slide_id if slide_id is not None else next(remaining_ids) for slide_id in desired_order]
+
+        requests: List[Dict[str, Any]] = []
+        for target_index, slide_id in enumerate(desired_order):
+            current_index = current_order.index(slide_id)
+            if current_index == target_index:
+                continue
+            insertion_index = target_index + (1 if current_index < target_index else 0)
+            requests.append({
+                'updateSlidesPosition': {
+                    'slideObjectIds': [slide_id],
+                    'insertionIndex': insertion_index,
+                }
+            })
+            current_order.pop(current_index)
+            current_order.insert(target_index, slide_id)
+
+        if requests:
+            service.presentations().batchUpdate(
+                presentationId=params.presentation_id,
+                body={'requests': requests},
+            ).execute()
+
+        return json.dumps({
+            "slideCount": slide_count,
+            "requestedPositions": positions,
+            "finalOrder": [slide_id for slide_id in desired_order],
+            "movedSlideCount": len(requests),
+        }, indent=2)
+    except Exception as e:
+        return f"Error rearranging slides: {str(e)}"
+
+@mcp.tool(name="batch_update",
+    annotations=ToolAnnotations(
+        title="Run raw Google Slides batch update requests",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ))
+async def batch_update(params: BatchUpdateInput) -> str:
+    """Runs raw presentations.batchUpdate requests with safe text-color validation.
+
+    TextStyle foregroundColor is an OptionalColor, so use
+    {"opaqueColor": {"rgbColor": {...}}}. Shape fills remain raw Google API
+    Color values, for example shapeBackgroundFill.solidFill.color.rgbColor.
+    """
+    try:
+        normalized_requests = normalize_text_style_foreground_colors(params.requests)
+    except ValueError as exc:
+        return f"Error validating batch update: {exc}"
+
+    try:
+        response = get_slides_service().presentations().batchUpdate(
+            presentationId=params.presentation_id,
+            body={"requests": normalized_requests},
+        ).execute()
+        return json.dumps(response, indent=2)
+    except Exception as exc:
+        return f"Error running batch update: {str(exc)}"
 
 @mcp.tool(name="update_slide", 
     annotations=ToolAnnotations(
@@ -881,6 +1104,41 @@ async def get_presentation(presentation_id: str) -> str:
         return json.dumps(summary, indent=2)
     except Exception as e:
         return f"Error getting presentation: {str(e)}"
+
+@mcp.tool(name="get_slide_elements",
+    annotations=ToolAnnotations(
+        title="Get Google Slides page elements",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ))
+async def get_slide_elements(
+    presentation_id: Annotated[str, Field(description="The ID of the presentation.")],
+    slide_index: Annotated[int, Field(description="1-based slide index.", ge=1)],
+) -> str:
+    """Returns object IDs, types, text, sizes, and transforms for one slide."""
+    try:
+        presentation = get_slides_service().presentations().get(
+            presentationId=presentation_id
+        ).execute()
+        slides = presentation.get('slides', [])
+        if slide_index > len(slides):
+            return f"Error: Slide index {slide_index} out of bounds (valid range: 1-{len(slides)})."
+
+        slide = slides[slide_index - 1]
+        result = {
+            "presentationId": presentation.get('presentationId', presentation_id),
+            "slideIndex": slide_index,
+            "slideObjectId": slide.get('objectId'),
+            "elements": [
+                summarize_page_element(element)
+                for element in slide.get('pageElements', [])
+            ],
+        }
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error getting slide elements: {str(e)}"
 
 if __name__ == "__main__":
     mcp.run()

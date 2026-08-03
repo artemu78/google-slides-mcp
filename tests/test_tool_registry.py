@@ -18,18 +18,21 @@ class TestToolRegistry(unittest.IsolatedAsyncioTestCase):
                 "create_presentation",
                 "add_slide",
                 "duplicate_slide",
+                "rearrange_slides",
+                "batch_update",
                 "update_slide",
                 "apply_dark_theme",
                 "export_thumbnails",
                 "compose_slide",
                 "delete_slide",
                 "get_presentation",
+                "get_slide_elements",
             },
         )
         self.assertNotIn("slides_speaker_notes_experiment", self.tools)
 
     async def test_read_only_tools_are_annotated(self):
-        for name in ("export_thumbnails", "get_presentation"):
+        for name in ("export_thumbnails", "get_presentation", "get_slide_elements"):
             with self.subTest(tool=name):
                 annotations = self.tools[name].annotations
                 self.assertIsNotNone(annotations)
@@ -43,6 +46,8 @@ class TestToolRegistry(unittest.IsolatedAsyncioTestCase):
             "create_presentation": False,
             "add_slide": False,
             "duplicate_slide": False,
+            "rearrange_slides": True,
+            "batch_update": False,
             "update_slide": True,
             "apply_dark_theme": True,
             "compose_slide": True,
@@ -71,6 +76,14 @@ class TestToolRegistry(unittest.IsolatedAsyncioTestCase):
             set(item_schema["required"]),
             {"x", "y", "width", "height"},
         )
+
+    async def test_rearrange_slides_exposes_slide_positions_as_an_object(self):
+        schema = self.tools["rearrange_slides"].inputSchema
+
+        self.assertNotIn("params", schema["properties"])
+        positions = schema["properties"]["slide_positions"]
+        self.assertEqual(positions["type"], "object")
+        self.assertEqual(positions["additionalProperties"]["type"], "integer")
 
 
 if __name__ == "__main__":

@@ -114,6 +114,11 @@ class ExportThumbnailsInput(BaseModel):
     presentation_id: str = Field(..., description="The ID of the presentation.")
     output_dir: str = Field(..., description="Local directory for exported PNG thumbnails.")
 
+class ExportSlideThumbnailInput(BaseModel):
+    presentation_id: str = Field(..., description="The ID of the presentation.")
+    slide_index: int = Field(..., description="1-based index of the slide to export.", ge=1)
+    output_path: str = Field(..., description="Local path for the exported PNG file.")
+
 class VisualElementInput(BaseModel):
     x: float = Field(..., description="Left position in points.")
     y: float = Field(..., description="Top position in points.")
@@ -292,6 +297,28 @@ def normalize_text_style_foreground_colors(
                 "{\"opaqueColor\": {\"rgbColor\": {...}}}, not {\"rgbColor\": {...}}."
             )
     return normalized_requests
+
+def export_thumbnail_file(
+    service: Any,
+    presentation_id: str,
+    slide_object_id: str,
+    output_path: str,
+) -> str:
+    """Download one Google Slides page thumbnail to a local PNG file."""
+    thumbnail = service.presentations().pages().getThumbnail(
+        presentationId=presentation_id,
+        pageObjectId=slide_object_id,
+        thumbnailProperties_thumbnailSize='LARGE',
+        thumbnailProperties_mimeType='PNG',
+    ).execute()
+    response = requests.get(thumbnail['contentUrl'], timeout=30)
+    response.raise_for_status()
+
+    absolute_output_path = os.path.abspath(output_path)
+    os.makedirs(os.path.dirname(absolute_output_path), exist_ok=True)
+    with open(absolute_output_path, 'wb') as output_file:
+        output_file.write(response.content)
+    return output_path
 
 def extract_notes_text(slide: Dict[str, Any]) -> str:
     notes_page = slide.get('notesPage') or {}
@@ -800,22 +827,64 @@ async def export_thumbnails(params: ExportThumbnailsInput) -> str:
         exported: List[str] = []
 
         for number, slide in enumerate(presentation.get('slides', []), 1):
-            thumbnail = service.presentations().pages().getThumbnail(
-                presentationId=params.presentation_id,
-                pageObjectId=slide.get('objectId'),
-                thumbnailProperties_thumbnailSize='LARGE',
-                thumbnailProperties_mimeType='PNG',
-            ).execute()
-            response = requests.get(thumbnail['contentUrl'], timeout=30)
-            response.raise_for_status()
             output_path = os.path.join(params.output_dir, f"slide-{number:02d}.png")
-            with open(output_path, 'wb') as output_file:
-                output_file.write(response.content)
-            exported.append(output_path)
+            exported.append(export_thumbnail_file(
+                service,
+                params.presentation_id,
+                slide.get('objectId'),
+                output_path,
+            ))
 
         return json.dumps({"count": len(exported), "files": exported}, indent=2)
     except Exception as e:
         return f"Error exporting thumbnails: {str(e)}"
+
+@mcp.tool(name="export_slide_thumbnail",
+    annotations=ToolAnnotations(
+        title="Export one Google Slides page as a PNG thumbnail",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    ))
+async def export_slide_thumbnail(
+    presentation_id: Annotated[str, Field(description="The ID of the presentation.")],
+    slide_index: Annotated[int, Field(description="1-based index of the slide to export.", ge=1)],
+    output_path: Annotated[str, Field(description="Local path for the exported PNG file.")],
+) -> str:
+    """Exports one slide selected by its 1-based index to a local PNG file."""
+    params = ExportSlideThumbnailInput(
+        presentation_id=presentation_id,
+        slide_index=slide_index,
+        output_path=output_path,
+    )
+    try:
+        service = get_slides_service()
+        presentation = service.presentations().get(
+            presentationId=params.presentation_id
+        ).execute()
+        slides = presentation.get('slides', [])
+        if params.slide_index > len(slides):
+            return (
+                f"Error: Slide index {params.slide_index} out of bounds "
+                f"(valid range: 1-{len(slides)})."
+            )
+
+        slide_object_id = slides[params.slide_index - 1].get('objectId')
+        exported_file = export_thumbnail_file(
+            service,
+            params.presentation_id,
+            slide_object_id,
+            params.output_path,
+        )
+        return json.dumps({
+            "count": 1,
+            "slideIndex": params.slide_index,
+            "slideObjectId": slide_object_id,
+            "file": exported_file,
+        }, indent=2)
+    except Exception as e:
+        return f"Error exporting slide thumbnail: {str(e)}"
 
 @mcp.tool(name="compose_slide", 
     annotations=ToolAnnotations(

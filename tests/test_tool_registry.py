@@ -23,6 +23,7 @@ class TestToolRegistry(unittest.IsolatedAsyncioTestCase):
                 "update_slide",
                 "apply_dark_theme",
                 "export_thumbnails",
+                "export_slide_thumbnail",
                 "compose_slide",
                 "delete_slide",
                 "get_presentation",
@@ -32,7 +33,12 @@ class TestToolRegistry(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("slides_speaker_notes_experiment", self.tools)
 
     async def test_read_only_tools_are_annotated(self):
-        for name in ("export_thumbnails", "get_presentation", "get_slide_elements"):
+        for name in (
+            "export_thumbnails",
+            "export_slide_thumbnail",
+            "get_presentation",
+            "get_slide_elements",
+        ):
             with self.subTest(tool=name):
                 annotations = self.tools[name].annotations
                 self.assertIsNotNone(annotations)

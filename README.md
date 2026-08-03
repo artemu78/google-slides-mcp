@@ -14,6 +14,7 @@ It provides tools to create decks, add slides, update slide text placeholders, a
 - `update_slide`: Updates the title, body, and speaker notes of a slide using its 1-based index.
 - `apply_dark_theme`: Applies a configurable dark background, text colors, and font family to every slide.
 - `export_thumbnails`: Exports every slide as a PNG thumbnail to a local directory for visual QA.
+- `export_slide_thumbnail`: Exports one slide selected by its 1-based index to a specific local PNG path.
 - `compose_slide`: Clears selected placeholders and composes a slide from positioned native text and shape elements.
 - `delete_slide`: Deletes a slide using its 1-based index.
 - `get_presentation`: Retrieves presentation metadata and details for its slides.

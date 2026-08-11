@@ -20,6 +20,9 @@ class TestToolRegistry(unittest.IsolatedAsyncioTestCase):
                 "duplicate_slide",
                 "rearrange_slides",
                 "batch_update",
+                "search_icons",
+                "get_icon_url",
+                "insert_icon",
                 "update_slide",
                 "apply_dark_theme",
                 "export_thumbnails",
@@ -47,6 +50,15 @@ class TestToolRegistry(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(annotations.idempotentHint)
                 self.assertTrue(annotations.openWorldHint)
 
+        for name in ("search_icons", "get_icon_url"):
+            with self.subTest(tool=name):
+                annotations = self.tools[name].annotations
+                self.assertIsNotNone(annotations)
+                self.assertTrue(annotations.readOnlyHint)
+                self.assertFalse(annotations.destructiveHint)
+                self.assertTrue(annotations.idempotentHint)
+                self.assertFalse(annotations.openWorldHint)
+
     async def test_mutating_tools_are_annotated(self):
         expected_idempotency = {
             "create_presentation": False,
@@ -54,6 +66,7 @@ class TestToolRegistry(unittest.IsolatedAsyncioTestCase):
             "duplicate_slide": False,
             "rearrange_slides": True,
             "batch_update": False,
+            "insert_icon": False,
             "update_slide": True,
             "apply_dark_theme": True,
             "compose_slide": True,
@@ -90,6 +103,18 @@ class TestToolRegistry(unittest.IsolatedAsyncioTestCase):
         positions = schema["properties"]["slide_positions"]
         self.assertEqual(positions["type"], "object")
         self.assertEqual(positions["additionalProperties"]["type"], "integer")
+
+    async def test_icon_tools_expose_direct_typed_arguments(self):
+        search_schema = self.tools["search_icons"].inputSchema
+        self.assertNotIn("params", search_schema["properties"])
+        self.assertEqual(search_schema["properties"]["style"]["enum"], ["outline", "filled"])
+
+        insert_schema = self.tools["insert_icon"].inputSchema
+        self.assertNotIn("params", insert_schema["properties"])
+        self.assertEqual(
+            set(insert_schema["required"]),
+            {"presentation_id", "slide_index", "icon_name", "x", "y", "width", "height"},
+        )
 
 
 if __name__ == "__main__":

@@ -6,7 +6,9 @@ import requests
 import uuid
 from copy import deepcopy
 from contextlib import redirect_stdout
-from typing import Annotated, Optional, List, Dict, Any
+from pathlib import Path
+from typing import Annotated, Optional, List, Dict, Any, Literal
+from urllib.parse import quote
 from pydantic import BaseModel, Field, ConfigDict
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -25,6 +27,11 @@ SCOPES = [
 ]
 
 mcp = FastMCP("google_slides_mcp")
+
+TABLER_ICONS_DIR = Path(__file__).resolve().parent / "tabler-icons-main" / "icons"
+TABLER_ICONS_BASE_URL_ENV = "TABLER_ICONS_BASE_URL"
+TablerIconStyle = Literal["outline", "filled"]
+TablerIconTheme = Literal["dark", "light"]
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -181,7 +188,54 @@ class BatchUpdateInput(BaseModel):
         ),
     )
 
+class SearchIconsInput(BaseModel):
+    query: str = Field(..., description="Icon name search, for example 'arrow right'.", min_length=1)
+    style: TablerIconStyle = Field("outline", description="Tabler icon style.")
+    limit: int = Field(20, description="Maximum matches to return.", ge=1, le=100)
+    offset: int = Field(0, description="Number of matching icons to skip.", ge=0)
+
+class GetIconUrlInput(BaseModel):
+    icon_name: str = Field(..., description="Exact Tabler icon name, without a file extension.", min_length=1)
+    style: TablerIconStyle = Field("outline", description="Tabler icon style.")
+    theme: TablerIconTheme = Field("dark", description="Icon color theme: dark is black; light is #E5E7EB.")
+
 # --- Helpers ---
+
+def normalize_icon_name(value: str) -> str:
+    """Normalize a client-friendly icon name to the Tabler filename form."""
+    normalized = value.strip().lower().removesuffix(".png").removesuffix(".svg")
+    return normalized.replace("_", "-").replace(" ", "-")
+
+def get_icon_names(style: TablerIconStyle) -> List[str]:
+    """Return the locally bundled icon catalog for one style."""
+    style_dir = TABLER_ICONS_DIR / style
+    if not style_dir.is_dir():
+        raise ValueError(
+            f"Tabler icon catalog is unavailable for style '{style}' at {style_dir}."
+        )
+    return sorted(path.stem for path in style_dir.glob("*.svg"))
+
+def require_icon(icon_name: str, style: TablerIconStyle) -> str:
+    """Normalize an icon name and ensure it exists in the bundled catalog."""
+    normalized = normalize_icon_name(icon_name)
+    if not normalized or normalized not in set(get_icon_names(style)):
+        raise ValueError(
+            f"Unknown {style} Tabler icon '{icon_name}'. "
+            "Call search_icons to find valid icon names."
+        )
+    return normalized
+
+def build_icon_url(icon_name: str, style: TablerIconStyle, theme: TablerIconTheme) -> str:
+    """Build the public PNG URL configured for Google Slides image insertion."""
+    base_url = os.environ.get(TABLER_ICONS_BASE_URL_ENV, "").strip().rstrip("/")
+    if not base_url:
+        raise ValueError(
+            f"{TABLER_ICONS_BASE_URL_ENV} is not configured. Set it to the public "
+            "PNG catalog root, for example https://cdn.example.com/tabler-icons."
+        )
+    if not base_url.startswith(("https://", "http://")):
+        raise ValueError(f"{TABLER_ICONS_BASE_URL_ENV} must be an HTTP(S) URL.")
+    return f"{base_url}/{theme}/{style}/{quote(icon_name, safe='-')}.png"
 
 def find_placeholder(elements, p_type):
     for el in elements:
@@ -634,6 +688,170 @@ async def batch_update(params: BatchUpdateInput) -> str:
         return json.dumps(response, indent=2)
     except Exception as exc:
         return f"Error running batch update: {str(exc)}"
+
+@mcp.tool(name="search_icons",
+    annotations=ToolAnnotations(
+        title="Search the bundled Tabler icon catalog",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ))
+async def search_icons(
+    query: Annotated[str, Field(description="Icon name search, for example 'arrow right'.", min_length=1)],
+    style: Annotated[TablerIconStyle, Field(description="Tabler icon style.")] = "outline",
+    limit: Annotated[int, Field(description="Maximum matches to return.", ge=1, le=100)] = 20,
+    offset: Annotated[int, Field(description="Number of matching icons to skip.", ge=0)] = 0,
+) -> str:
+    """Searches Tabler icon names bundled with this server.
+
+    Results are ordered by exact match, prefix match, then substring match.
+    Use the returned exact name with get_icon_url or insert_icon.
+    """
+    params = SearchIconsInput(query=query, style=style, limit=limit, offset=offset)
+    try:
+        normalized_query = normalize_icon_name(params.query)
+        matches = [
+            name for name in get_icon_names(params.style)
+            if normalized_query in name
+        ]
+        matches.sort(key=lambda name: (
+            name != normalized_query,
+            not name.startswith(normalized_query),
+            len(name),
+            name,
+        ))
+        page = matches[params.offset:params.offset + params.limit]
+        next_offset = params.offset + len(page)
+        return json.dumps({
+            "query": params.query,
+            "normalizedQuery": normalized_query,
+            "style": params.style,
+            "totalCount": len(matches),
+            "count": len(page),
+            "offset": params.offset,
+            "icons": page,
+            "hasMore": next_offset < len(matches),
+            "nextOffset": next_offset if next_offset < len(matches) else None,
+        }, indent=2)
+    except Exception as exc:
+        return f"Error searching icons: {str(exc)}"
+
+@mcp.tool(name="get_icon_url",
+    annotations=ToolAnnotations(
+        title="Get a public Tabler icon PNG URL",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ))
+async def get_icon_url(
+    icon_name: Annotated[str, Field(description="Exact Tabler icon name, without a file extension.", min_length=1)],
+    style: Annotated[TablerIconStyle, Field(description="Tabler icon style.")] = "outline",
+    theme: Annotated[TablerIconTheme, Field(description="Icon color theme: dark is black; light is #E5E7EB.")] = "dark",
+) -> str:
+    """Returns the configured public PNG URL for an exact Tabler icon name."""
+    params = GetIconUrlInput(icon_name=icon_name, style=style, theme=theme)
+    try:
+        normalized_name = require_icon(params.icon_name, params.style)
+        return json.dumps({
+            "iconName": normalized_name,
+            "style": params.style,
+            "theme": params.theme,
+            "format": "png",
+            "url": build_icon_url(normalized_name, params.style, params.theme),
+        }, indent=2)
+    except Exception as exc:
+        return f"Error resolving icon URL: {str(exc)}"
+
+@mcp.tool(name="insert_icon",
+    annotations=ToolAnnotations(
+        title="Insert a public Tabler icon PNG into a Google Slides page",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ))
+async def insert_icon(
+    presentation_id: Annotated[str, Field(description="The ID of the presentation.", min_length=1)],
+    slide_index: Annotated[int, Field(description="1-based slide index.", ge=1)],
+    icon_name: Annotated[str, Field(description="Exact Tabler icon name, without a file extension.", min_length=1)],
+    x: Annotated[float, Field(description="Left position in points.")],
+    y: Annotated[float, Field(description="Top position in points.")],
+    width: Annotated[float, Field(description="Width in points.", gt=0)],
+    height: Annotated[float, Field(description="Height in points.", gt=0)],
+    style: Annotated[TablerIconStyle, Field(description="Tabler icon style.")] = "outline",
+    theme: Annotated[TablerIconTheme, Field(description="Icon color theme: dark is black; light is #E5E7EB.")] = "dark",
+    alt_text: Annotated[Optional[str], Field(description="Human-readable accessibility description.")] = None,
+) -> str:
+    """Inserts a Tabler PNG from the configured public catalog into one slide.
+
+    Google fetches the public URL once and stores a copy in the presentation.
+    Position and size use points, matching compose_slide and get_slide_elements.
+    """
+    try:
+        normalized_name = require_icon(icon_name, style)
+        icon_url = build_icon_url(normalized_name, style, theme)
+        service = get_slides_service()
+        presentation = service.presentations().get(
+            presentationId=presentation_id
+        ).execute()
+        slides = presentation.get("slides", [])
+        if slide_index > len(slides):
+            return (
+                f"Error: Slide index {slide_index} out of bounds "
+                f"(valid range: 1-{len(slides)})."
+            )
+
+        slide_id = slides[slide_index - 1].get("objectId")
+        object_id = f"tabler_{uuid.uuid4().hex[:16]}"
+        requests_to_run: List[Dict[str, Any]] = [{
+            "createImage": {
+                "objectId": object_id,
+                "url": icon_url,
+                "elementProperties": {
+                    "pageObjectId": slide_id,
+                    "size": {
+                        "width": {"magnitude": width, "unit": "PT"},
+                        "height": {"magnitude": height, "unit": "PT"},
+                    },
+                    "transform": {
+                        "scaleX": 1,
+                        "scaleY": 1,
+                        "translateX": x,
+                        "translateY": y,
+                        "unit": "PT",
+                    },
+                },
+            }
+        }]
+        if alt_text:
+            requests_to_run.append({
+                "updatePageElementAltText": {
+                    "objectId": object_id,
+                    "title": f"Tabler icon: {normalized_name}",
+                    "description": alt_text,
+                }
+            })
+
+        service.presentations().batchUpdate(
+            presentationId=presentation_id,
+            body={"requests": requests_to_run},
+        ).execute()
+        return json.dumps({
+            "presentationId": presentation_id,
+            "slideIndex": slide_index,
+            "slideObjectId": slide_id,
+            "objectId": object_id,
+            "iconName": normalized_name,
+            "style": style,
+            "theme": theme,
+            "url": icon_url,
+            "position": {"x": x, "y": y, "unit": "PT"},
+            "size": {"width": width, "height": height, "unit": "PT"},
+        }, indent=2)
+    except Exception as exc:
+        return f"Error inserting icon: {str(exc)}"
 
 @mcp.tool(name="update_slide", 
     annotations=ToolAnnotations(

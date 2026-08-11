@@ -11,6 +11,9 @@ It provides tools to create decks, add slides, update slide text placeholders, a
 - `duplicate_slide`: Duplicates a slide using its 1-based index.
 - `rearrange_slides`: Moves slides using a mapping of current 1-based slide numbers to new 1-based positions; unspecified slides retain their relative order.
 - `batch_update`: Runs raw Google Slides `presentations.batchUpdate` requests, including the full Google Slides API request surface.
+- `search_icons`: Searches the bundled Tabler icon catalog by name and style.
+- `get_icon_url`: Resolves an exact Tabler icon name to its configured public PNG URL.
+- `insert_icon`: Inserts a public Tabler PNG into a slide at a position and size measured in points.
 - `update_slide`: Updates the title, body, and speaker notes of a slide using its 1-based index.
 - `apply_dark_theme`: Applies a configurable dark background, text colors, and font family to every slide.
 - `export_thumbnails`: Exports every slide as a PNG thumbnail to a local directory for visual QA.
@@ -101,6 +104,79 @@ Add the following configuration to your Gemini CLI configuration (usually in `~/
   }
 }
 ```
+
+### Tabler icon PNG catalog
+
+The server uses the bundled `tabler-icons-main/icons` folders as its searchable
+catalog. Google Slides cannot insert these local SVG files directly, so upload
+PNG versions to a publicly readable HTTP(S) location with this layout:
+
+```text
+<base URL>/dark/outline/<icon-name>.png
+<base URL>/dark/filled/<icon-name>.png
+<base URL>/light/outline/<icon-name>.png
+<base URL>/light/filled/<icon-name>.png
+```
+
+Then configure the MCP server process with `TABLER_ICONS_BASE_URL`. The value is
+the catalog root before the `outline` and `filled` directories:
+
+```json
+{
+  "mcpServers": {
+    "google-slides": {
+      "command": "python3",
+      "args": ["/absolute/path/to/google_slides_mcp/google_slides_mcp.py"],
+      "env": {
+        "TABLER_ICONS_BASE_URL": "https://assets.example.com/tabler-icons"
+      }
+    }
+  }
+}
+```
+
+MCP clients should use this sequence:
+
+1. Call `search_icons` with a human-friendly query such as `arrow right`.
+2. Use the returned exact icon name with `insert_icon`, or call
+   `get_icon_url` when only the public asset URL is needed.
+3. Pass `presentation_id`, a 1-based `slide_index`, and `x`, `y`, `width`, and
+   `height` in points to `insert_icon`. Set `theme` to `dark` (black, default)
+   or `light` (#E5E7EB) to match the slide background.
+
+The insertion tool validates the name against the bundled catalog before it
+calls Google. Google fetches the PNG once and stores a copy in the presentation.
+The public PNG must satisfy the Google Slides image limits: PNG, JPEG, or GIF;
+less than 50 MB; no more than 25 megapixels; and a URL no longer than 2 KB.
+
+#### Convert and upload the bundled Tabler icons
+
+The resumable batch script renders transparent 96×96 PNGs into a cache outside
+the repository, then uses one AWS CLI `s3 sync` operation. It produces a `dark`
+black catalog or a `light` #E5E7EB catalog. It reads the bucket, region, and AWS credentials from
+`[mcp_servers.s3-uploader.env]` in
+`~/.codex/config.toml`; credentials are never printed. Install the prerequisites
+first (`brew install librsvg awscli` on macOS), then preview or run the sync:
+
+```bash
+python3 scripts/upload_tabler_icons.py --dry-run
+python3 scripts/upload_tabler_icons.py --upload
+```
+
+To use an existing local AWS CLI profile instead, provide the profile, bucket,
+region, and desired theme explicitly:
+
+```bash
+python3 scripts/upload_tabler_icons.py --upload --theme light \
+  --aws-profile default --bucket mcp-server-storage --region us-east-1
+```
+
+The sync sets `Content-Type: image/png`, does not delete remote objects, and does
+not set an ACL. Existing PNGs are reconverted only when the source SVG is newer.
+The resulting catalog root is normally
+`https://<bucket>.s3.<region>.amazonaws.com/tabler-icons`. Google Slides can use
+that URL only when the PNG objects are publicly retrievable over HTTPS through
+the bucket policy or another configured public endpoint.
 
 ### ⚠️ Note on `/mcp auth`
 **Do NOT use `/mcp auth google-slides`** in Gemini CLI. This server handles its own authentication via the Python script. If you attempt to use `/mcp auth`, you may see an error like:

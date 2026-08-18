@@ -153,6 +153,9 @@ class ComposeSlideInput(BaseModel):
     accent_hex: str = Field("#49D3FF", description="Accent color in #RRGGBB format.")
     clear_body: bool = Field(True, description="Remove text from the existing body placeholder.")
     clear_title: bool = Field(False, description="Remove text from the existing title placeholder.")
+    show_accent: bool = Field(True, description="Whether to render the accent line under the title.")
+    accent_y: Optional[float] = Field(None, description="Custom Y position in points for the accent line (defaults to 88).")
+    accent_width: Optional[float] = Field(None, description="Custom width in points for the accent line (defaults to 72).")
     elements: List[VisualElementInput] = Field(default_factory=list, description="Native slide elements to create.")
 
 class DeleteSlideInput(BaseModel):
@@ -1130,6 +1133,17 @@ async def compose_slide(
     clear_title: Annotated[
         bool, Field(description="Remove text from the existing title placeholder.")
     ] = False,
+    show_accent: Annotated[
+        bool, Field(description="Whether to render the accent line under the title.")
+    ] = True,
+    accent_y: Annotated[
+        Optional[float],
+        Field(description="Custom Y position in points for the accent line (defaults to 88)."),
+    ] = None,
+    accent_width: Annotated[
+        Optional[float],
+        Field(description="Custom width in points for the accent line (defaults to 72)."),
+    ] = None,
     elements: Annotated[
         List[VisualElementInput],
         Field(
@@ -1149,6 +1163,9 @@ async def compose_slide(
         accent_hex=accent_hex,
         clear_body=clear_body,
         clear_title=clear_title,
+        show_accent=show_accent,
+        accent_y=accent_y,
+        accent_width=accent_width,
         elements=elements,
     )
     try:
@@ -1228,17 +1245,25 @@ async def compose_slide(
         })
 
         # A consistent accent rule and slide number create deck-level rhythm.
-        standard_elements = [
-            VisualElementInput(
-                x=50, y=77, width=72, height=4, shape_type='RECTANGLE',
-                fill_hex=params.accent_hex, border_hex=params.accent_hex,
-            ),
+        accent_y_pos = params.accent_y if params.accent_y is not None else 88.0
+        accent_w = params.accent_width if params.accent_width is not None else 72.0
+
+        standard_elements: List[VisualElementInput] = []
+        if params.show_accent and not params.clear_title:
+            standard_elements.append(
+                VisualElementInput(
+                    x=50, y=accent_y_pos, width=accent_w, height=3, shape_type='RECTANGLE',
+                    fill_hex=params.accent_hex, border_hex=params.accent_hex,
+                )
+            )
+
+        standard_elements.append(
             VisualElementInput(
                 x=672, y=378, width=28, height=16,
                 text=f"{params.slide_index:02d}", font_size=9,
                 text_hex=params.accent_hex, alignment='END', valign='MIDDLE',
-            ),
-        ]
+            )
+        )
 
         for element_number, element in enumerate(standard_elements + params.elements, 1):
             object_id = f"qa_vis_{params.slide_index}_{element_number}_{uuid.uuid4().hex[:8]}"
